@@ -1,4 +1,4 @@
-package com.protim.batch.flatfile;
+package com.protim.batch;
 
 import java.io.BufferedWriter;
 import java.io.FileWriter;
@@ -6,8 +6,10 @@ import java.io.IOException;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration;
+import org.springframework.context.annotation.ComponentScan;
 
-@SpringBootApplication
+@SpringBootApplication(exclude = { DataSourceAutoConfiguration.class })
 public class FlatfileApplication {
 
 	private static String[] names = { "Amit", "John", "David", "Mary", "Carlos", "Subir", "Chris" };
