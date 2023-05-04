@@ -1,5 +1,6 @@
 package com.protim.batch.config;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import javax.sql.DataSource;
@@ -23,6 +24,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.FileSystemResource;
+import org.springframework.core.task.SimpleAsyncTaskExecutor;
+import org.springframework.core.task.TaskExecutor;
 
 import com.protim.batch.entity.Record;
 
@@ -30,8 +33,11 @@ import com.protim.batch.entity.Record;
 @EnableBatchProcessing
 public class SpringBatchConfig extends DefaultBatchConfigurer {
 
+    private static final String OUTPUT_NAME = "flatfile/output/output_" + System.currentTimeMillis() + ".csv";
     private static final Logger LOGGER = LoggerFactory.getLogger(SpringBatchConfig.class);
-    private static final int CHUNK = 100;
+    private static final int CHUNK = 200;
+    private static final int CONCURRENCY = 10;
+    private static final boolean THREAD_ENABLED = true;
 
     @Autowired
     private JobBuilderFactory jobBuilderFactory;
@@ -77,40 +83,62 @@ public class SpringBatchConfig extends DefaultBatchConfigurer {
     @Bean
     public FlatFileItemWriter<Record> writer() {
         FlatFileItemWriter<Record> writer = new FlatFileItemWriter<>() {
-            @Override
-            public String doWrite(List<? extends Record> items) {
-                LOGGER.info("csvWriter invoked for writing #lines: " + items.size());
-                return super.doWrite(items);
-            }
-        };
-        writer.setName("csvWriter");
-        writer.setResource(new FileSystemResource("flatfile/output/output.csv"));
-        writer.setAppendAllowed(true);
-        writer.setLineAggregator(new DelimitedLineAggregator<>() {
             {
-                setDelimiter(",");
-                setFieldExtractor(new BeanWrapperFieldExtractor<>() {
+                setName("csvWriter");
+                setResource(new FileSystemResource(OUTPUT_NAME));
+                setAppendAllowed(true);
+                setLineAggregator(new DelimitedLineAggregator<>() {
                     {
-                        setNames(new String[] { "id", "name", "subject", "grade", "marks", "spec" });
+                        setDelimiter(",");
+                        setFieldExtractor(new BeanWrapperFieldExtractor<>() {
+                            {
+                                setNames(new String[] { "id", "name", "subject", "grade", "marks", "spec" });
+                            }
+                        });
                     }
                 });
             }
-        });
+
+            @Override
+            public synchronized void write(List<? extends Record> items) throws Exception {
+                List<Integer> ids = new ArrayList<>();
+                items.stream().forEach(i -> ids.add(i.getId()));
+                LOGGER.info("csvWriter invoked for writing #lines: " + items.size() + " with IDs: " + ids);
+                super.write(items);
+            }
+        };
         return writer;
     }
 
     @Bean
     public Step step1() {
+        if (THREAD_ENABLED) {
+            return stepBuilderFactory.get("process-csv").<Record, Record>chunk(CHUNK)
+                    .reader(reader())
+                    .processor(processor())
+                    .writer(writer())
+                    .taskExecutor(asyncTaskExecutor())
+                    .build();
+        }
         return stepBuilderFactory.get("process-csv").<Record, Record>chunk(CHUNK)
                 .reader(reader())
                 .processor(processor())
-                .writer(writer()).build();
+                .writer(writer())
+                .build();
+
     }
 
     @Bean
     public Job runJob() {
         return jobBuilderFactory.get("csv-job")
                 .flow(step1()).end().build();
+    }
+
+    @Bean
+    public TaskExecutor asyncTaskExecutor() {
+        SimpleAsyncTaskExecutor executor = new SimpleAsyncTaskExecutor();
+        executor.setConcurrencyLimit(CONCURRENCY);
+        return executor;
     }
 
 }
