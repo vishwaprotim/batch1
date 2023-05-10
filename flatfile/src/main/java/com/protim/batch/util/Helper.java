@@ -4,6 +4,14 @@ import java.io.BufferedWriter;
 import java.io.FileWriter;
 import java.io.IOException;
 
+import org.springframework.batch.item.file.FlatFileItemReader;
+import org.springframework.batch.item.file.mapping.BeanWrapperFieldSetMapper;
+import org.springframework.batch.item.file.mapping.DefaultLineMapper;
+import org.springframework.batch.item.file.transform.DelimitedLineTokenizer;
+import org.springframework.core.io.FileSystemResource;
+
+import com.protim.batch.entity.Record;
+
 /**
  * Utility Class for CSV Batch
  */
@@ -38,6 +46,29 @@ public class Helper {
         } catch (IOException e) {
             e.printStackTrace();
         }
+    }
+
+    public FlatFileItemReader<Record> readerWithoutAnClassExample() {
+        FlatFileItemReader<Record> itemReader = new FlatFileItemReader<>();
+        itemReader.setResource(new FileSystemResource("flatfile/src/main/resources/input.csv"));
+        itemReader.setName("csvFileReader");
+        itemReader.setLinesToSkip(1);
+
+        // Create Line Mapper for the reader
+        DelimitedLineTokenizer lineTokenizer = new DelimitedLineTokenizer();
+        lineTokenizer.setNames("id", "name", "subject", "marks", "spec");
+        lineTokenizer.setStrict(false);
+        lineTokenizer.setDelimiter(DelimitedLineTokenizer.DELIMITER_COMMA);
+
+        BeanWrapperFieldSetMapper<Record> fieldSetMapper = new BeanWrapperFieldSetMapper<Record>();
+        fieldSetMapper.setTargetType(Record.class);
+
+        DefaultLineMapper<Record> lineMapper = new DefaultLineMapper<>();
+        lineMapper.setLineTokenizer(lineTokenizer);
+        lineMapper.setFieldSetMapper(fieldSetMapper);
+
+        itemReader.setLineMapper(lineMapper);
+        return itemReader;
     }
 
 }

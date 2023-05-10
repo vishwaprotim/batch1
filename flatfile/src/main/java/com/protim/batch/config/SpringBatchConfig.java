@@ -1,5 +1,7 @@
 package com.protim.batch.config;
 
+import java.io.IOException;
+import java.io.Writer;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -13,6 +15,7 @@ import org.springframework.batch.core.configuration.annotation.DefaultBatchConfi
 import org.springframework.batch.core.configuration.annotation.EnableBatchProcessing;
 import org.springframework.batch.core.configuration.annotation.JobBuilderFactory;
 import org.springframework.batch.core.configuration.annotation.StepBuilderFactory;
+import org.springframework.batch.item.file.FlatFileHeaderCallback;
 import org.springframework.batch.item.file.FlatFileItemReader;
 import org.springframework.batch.item.file.FlatFileItemWriter;
 import org.springframework.batch.item.file.mapping.BeanWrapperFieldSetMapper;
@@ -33,8 +36,11 @@ import com.protim.batch.entity.Record;
 @EnableBatchProcessing
 public class SpringBatchConfig extends DefaultBatchConfigurer {
 
-    private static final String OUTPUT_NAME = "flatfile/output/output_" + System.currentTimeMillis() + ".csv";
     private static final Logger LOGGER = LoggerFactory.getLogger(SpringBatchConfig.class);
+
+    private static final String OUTPUT_NAME = "flatfile/output/output_" + System.currentTimeMillis() + ".csv";
+    private static final String THREAD_PREFIX = "csv_batch_thread_";
+
     private static final int CHUNK = 200;
     private static final int CONCURRENCY = 10;
     private static final boolean THREAD_ENABLED = true;
@@ -97,8 +103,17 @@ public class SpringBatchConfig extends DefaultBatchConfigurer {
                         });
                     }
                 });
+
+                // Write Header for output CSV File
+                setHeaderCallback(new FlatFileHeaderCallback() {
+                    @Override
+                    public void writeHeader(Writer writer) throws IOException {
+                        writer.write("id,name,subject,grade,marks,spec");
+                    }
+                });
             }
 
+            // Thread safe write method
             @Override
             public synchronized void write(List<? extends Record> items) throws Exception {
                 List<Integer> ids = new ArrayList<>();
@@ -112,19 +127,19 @@ public class SpringBatchConfig extends DefaultBatchConfigurer {
 
     @Bean
     public Step step1() {
-        if (THREAD_ENABLED) {
-            return stepBuilderFactory.get("process-csv").<Record, Record>chunk(CHUNK)
-                    .reader(reader())
-                    .processor(processor())
-                    .writer(writer())
-                    .taskExecutor(asyncTaskExecutor())
-                    .build();
-        }
-        return stepBuilderFactory.get("process-csv").<Record, Record>chunk(CHUNK)
-                .reader(reader())
-                .processor(processor())
-                .writer(writer())
-                .build();
+        return (THREAD_ENABLED) ?
+
+                stepBuilderFactory.get("process-csv").<Record, Record>chunk(CHUNK)
+                        .reader(reader())
+                        .processor(processor())
+                        .writer(writer())
+                        .taskExecutor(asyncTaskExecutor())
+                        .build()
+                : stepBuilderFactory.get("process-csv").<Record, Record>chunk(CHUNK)
+                        .reader(reader())
+                        .processor(processor())
+                        .writer(writer())
+                        .build();
 
     }
 
@@ -136,8 +151,19 @@ public class SpringBatchConfig extends DefaultBatchConfigurer {
 
     @Bean
     public TaskExecutor asyncTaskExecutor() {
-        SimpleAsyncTaskExecutor executor = new SimpleAsyncTaskExecutor();
-        executor.setConcurrencyLimit(CONCURRENCY);
+        SimpleAsyncTaskExecutor executor = new SimpleAsyncTaskExecutor(THREAD_PREFIX) {
+            @Override
+            public Thread createThread(Runnable runnable) {
+                Thread thread = super.createThread(runnable);
+                LOGGER.info("creating thread: " + thread.getName());
+                return thread;
+            }
+
+            {
+                setConcurrencyLimit(CONCURRENCY);
+
+            }
+        };
         return executor;
     }
 
