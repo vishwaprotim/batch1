@@ -27,8 +27,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.FileSystemResource;
-import org.springframework.core.task.SimpleAsyncTaskExecutor;
 import org.springframework.core.task.TaskExecutor;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import com.protim.batch.entity.Record;
 
@@ -39,10 +39,9 @@ public class SpringBatchConfig extends DefaultBatchConfigurer {
     private static final Logger LOGGER = LoggerFactory.getLogger(SpringBatchConfig.class);
 
     private static final String OUTPUT_NAME = "flatfile/output/output_" + System.currentTimeMillis() + ".csv";
-    private static final String THREAD_PREFIX = "csv_batch_thread_";
+    private static final int THREAD_COUNT = 10;
 
     private static final int CHUNK = 200;
-    private static final int CONCURRENCY = 10;
     private static final boolean THREAD_ENABLED = true;
 
     @Autowired
@@ -53,8 +52,7 @@ public class SpringBatchConfig extends DefaultBatchConfigurer {
 
     @Override
     public void setDataSource(DataSource dataSource) {
-        // This BatchConfigurer ignores any DataSource
-    }
+    } // This BatchConfigurer ignores any DataSource
 
     @Bean
     public FlatFileItemReader<Record> reader() {
@@ -118,7 +116,8 @@ public class SpringBatchConfig extends DefaultBatchConfigurer {
             public synchronized void write(List<? extends Record> items) throws Exception {
                 List<Integer> ids = new ArrayList<>();
                 items.stream().forEach(i -> ids.add(i.getId()));
-                LOGGER.info("csvWriter invoked for writing #lines: " + items.size() + " with IDs: " + ids);
+                LOGGER.info("Thread " + Thread.currentThread().getName() + ": csvWriter writing " + items.size()
+                        + " lines" + " with IDs: " + ids);
                 super.write(items);
             }
         };
@@ -126,45 +125,59 @@ public class SpringBatchConfig extends DefaultBatchConfigurer {
     }
 
     @Bean
-    public Step step1() {
+    public Step step1ProcessCsv() {
+        String stepName = "process-csv";
         return (THREAD_ENABLED) ?
 
-                stepBuilderFactory.get("process-csv").<Record, Record>chunk(CHUNK)
+                stepBuilderFactory.get(stepName).<Record, Record>chunk(CHUNK)
                         .reader(reader())
                         .processor(processor())
                         .writer(writer())
-                        .taskExecutor(asyncTaskExecutor())
+                        .taskExecutor(taskExecutor())
+                        .throttleLimit(THREAD_COUNT) // default is 4
                         .build()
-                : stepBuilderFactory.get("process-csv").<Record, Record>chunk(CHUNK)
+
+                : stepBuilderFactory.get(stepName).<Record, Record>chunk(CHUNK)
                         .reader(reader())
                         .processor(processor())
                         .writer(writer())
                         .build();
 
+        /*
+         * As tested on Core i3 7th gen
+         * With threads - job completed in 6s 931 ms
+         * Without threads - job completed in 10s 548 ms
+         */
     }
 
     @Bean
     public Job runJob() {
         return jobBuilderFactory.get("csv-job")
-                .flow(step1()).end().build();
+                .flow(step1ProcessCsv())
+                .end()
+                .build();
     }
 
-    @Bean
-    public TaskExecutor asyncTaskExecutor() {
-        SimpleAsyncTaskExecutor executor = new SimpleAsyncTaskExecutor(THREAD_PREFIX) {
+    @Bean("PoolTaskExecutor")
+    public TaskExecutor taskExecutor() {
+
+        // using this instead of SimpleAsyncTaskExecutor for more control
+        ThreadPoolTaskExecutor threadPoolTaskExecutor = new ThreadPoolTaskExecutor() {
             @Override
             public Thread createThread(Runnable runnable) {
                 Thread thread = super.createThread(runnable);
-                LOGGER.info("creating thread: " + thread.getName());
+                LOGGER.info(thread.getName() + " created.");
                 return thread;
             }
 
             {
-                setConcurrencyLimit(CONCURRENCY);
-
+                setCorePoolSize(THREAD_COUNT); // min #threads remain active at any point, default is 1
+                setMaxPoolSize(10); // max threads that can be created depending on queue capcacity
+                initialize();
             }
         };
-        return executor;
+
+        return threadPoolTaskExecutor;
     }
 
 }
